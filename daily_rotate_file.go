@@ -34,6 +34,7 @@ type File struct {
 	day     int
 	path    string
 	file    *os.File
+	onOpen  func(file *os.File, new bool)
 	onClose func(path string, didRotate bool)
 
 	// position in the file of last Write or Write2, exposed for tests
@@ -77,10 +78,19 @@ func (f *File) open() error {
 	}
 
 	// would be easier to open with os.O_APPEND but Seek() doesn't work in that case
-	flag := os.O_CREATE | os.O_WRONLY
+	n := false
+	flag := os.O_WRONLY
 	f.file, err = os.OpenFile(f.path, flag, 0644)
 	if err != nil {
-		return err
+		flag |= os.O_CREATE
+		f.file, err = os.OpenFile(f.path, flag, 0644)
+		if err != nil {
+			return err
+		}
+		n = true
+	}
+	if f.onOpen != nil {
+		f.onOpen(f.file, n)
 	}
 	_, err = f.file.Seek(0, io.SeekEnd)
 	return err
@@ -104,6 +114,8 @@ func (f *File) reopenIfNeeded() error {
 // a name of the file. It should be unique in a given day e.g. 2006-01-02.txt.
 // If you need more flexibility, use NewFileWithPathGenerator which accepts a
 // function that generates a file path.
+// onOpen is an optional function that will be called every time an existing
+// file is opened or new file is created (new parameter will bi true).
 // onClose is an optional function that will be called every time existing file
 // is closed, either as a result calling Close or due to being rotated.
 // didRotate will be true if it was closed due to rotation.
@@ -112,8 +124,8 @@ func (f *File) reopenIfNeeded() error {
 // Warning: time.Format might format more than you expect e.g.
 // time.Now().Format(`/logs/dir-2/2006-01-02.txt`) will change "-2" in "dir-2" to
 // current day. For better control over path generation, use NewFileWithPathGenerator
-func NewFile(pathFormat string, onClose func(path string, didRotate bool)) (*File, error) {
-	return newFile(pathFormat, nil, onClose)
+func NewFile(pathFormat string, onOpen func(file *os.File, new bool), onClose func(path string, didRotate bool)) (*File, error) {
+	return newFile(pathFormat, nil, onOpen, onClose)
 }
 
 // NewFileWithPathGenerator creates a new file that will be rotated daily
@@ -121,16 +133,18 @@ func NewFile(pathFormat string, onClose func(path string, didRotate bool)) (*Fil
 // pathGenerator is a function that will return a path for a daily log file.
 // It should be unique in a given day e.g. time.Format of "2006-01-02.txt"
 // creates a string unique for the day.
+// onOpen is an optional function that will be called every time an existing
+// file is opened or new file is created (new parameter will bi true).
 // onClose is an optional function that will be called every time existing file
 // is closed, either as a result calling Close or due to being rotated.
 // didRotate will be true if it was closed due to rotation.
 // If onClose() takes a long time, you should do it in a background goroutine
 // (it blocks all other operations, including writes)
-func NewFileWithPathGenerator(pathGenerator func(time.Time) string, onClose func(path string, didRotate bool)) (*File, error) {
-	return newFile("", pathGenerator, onClose)
+func NewFileWithPathGenerator(pathGenerator func(time.Time) string, onOpen func(file *os.File, new bool), onClose func(path string, didRotate bool)) (*File, error) {
+	return newFile("", pathGenerator, onOpen, onClose)
 }
 
-func newFile(pathFormat string, pathGenerator func(time.Time) string, onClose func(path string, didRotate bool)) (*File, error) {
+func newFile(pathFormat string, pathGenerator func(time.Time) string, onOpen func(file *os.File, new bool), onClose func(path string, didRotate bool)) (*File, error) {
 	f := &File{
 		pathFormat:    pathFormat,
 		pathGenerator: pathGenerator,
@@ -139,6 +153,7 @@ func newFile(pathFormat string, pathGenerator func(time.Time) string, onClose fu
 	// force early failure if we can't open the file
 	// note that we don't set onClose yet so that it won't get called due to
 	// opening/closing the file
+	f.onOpen = onOpen
 	err := f.reopenIfNeeded()
 	if err != nil {
 		return nil, err
