@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kjk/dailyrotate"
+	"github.com/bearsh/dailyrotate"
 )
 
 func onLogClose(path string, didRotate bool) {
@@ -25,7 +25,7 @@ var (
 )
 
 func openLogFile(pathFormat string, onClose func(string, bool)) error {
-	w, err := dailyrotate.NewFile(pathFormat, onLogClose)
+	w, err := dailyrotate.NewFile(pathFormat, nil, onLogClose)
 	if err != nil {
 		return err
 	}

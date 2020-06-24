@@ -1,7 +1,7 @@
 module examples
 
-go 1.13
+go 1.14
 
-replace github.com/kjk/dailyrotarte => ./..
+replace github.com/bearsh/dailyrotate => ./..
 
-require github.com/kjk/dailyrotate v0.0.0-20190904003340-aea00da60637
+require github.com/bearsh/dailyrotate v0.0.0-20200624194627-5f3100eaf19f
