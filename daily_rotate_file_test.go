@@ -48,8 +48,9 @@ func TestBasic(t *testing.T) {
 	pathExp := time.Now().UTC().Format(pathFormat)
 
 	onOpenCalled := false
-	onOpen := func(f *os.File, new bool) {
+	onOpen := func(f *os.File, new bool) bool {
 		onOpenCalled = true
+		return true
 	}
 	onCloseCalled := false
 	onClose := func(path string, didRotate bool) {
@@ -97,7 +98,7 @@ func TestPathGenerator(t *testing.T) {
 	pathExp := time.Now().UTC().Format(pathFormat)
 
 	nCalled := 0
-	pathGenerator := func(t time.Time) string {
+	pathGenerator := func(t time.Time, i uint) string {
 		nCalled++
 		return t.Format(pathFormat)
 	}
@@ -108,4 +109,43 @@ func TestPathGenerator(t *testing.T) {
 	err = f.Close()
 	assert.NoError(t, err)
 	assert.True(t, nCalled > 0)
+}
+
+func TestPathGeneratorOnOpen(t *testing.T) {
+	os.RemoveAll("test_dir")
+	defer os.RemoveAll("test_dir")
+
+	err := os.MkdirAll("test_dir", 0755)
+	assert.NoError(t, err)
+	testFile := filepath.Join("test_dir", "test.txt")
+	tf, err := os.OpenFile(testFile, os.O_WRONLY|os.O_CREATE, 0644)
+	assert.NoError(t, err)
+	tf.Write([]byte("test string"))
+	tf.Close()
+
+	nOnOpenCalled := uint(0)
+	onOpen := func(f *os.File, new bool) bool {
+		if !new {
+			b := make([]byte, 20)
+			nf, err := os.Open(f.Name())
+			assert.NoError(t, err)
+			r, err := nf.Read(b)
+			assert.NoError(t, err)
+			assert.True(t, r == len("test string"))
+			assert.True(t, string(b[:r]) == "test string")
+			nf.Close()
+		}
+		return true
+	}
+	pathGeneratorIter := uint(0)
+	pathGenerator := func(t time.Time, i uint) string {
+		pathGeneratorIter = i
+		return testFile
+	}
+	f, err := NewFileWithPathGenerator(pathGenerator, onOpen, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, f)
+	err = f.Close()
+	assert.NoError(t, err)
+	assert.True(t, pathGeneratorIter == nOnOpenCalled)
 }

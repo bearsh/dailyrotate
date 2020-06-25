@@ -18,6 +18,15 @@ import (
 	"time"
 )
 
+// PathGeneratorFunc is the prototype of the pathGenerator callback
+type PathGeneratorFunc func(time.Time, uint) string
+
+// OnOpenFunc is the prototype of the onOpen callback
+type OnOpenFunc func(file *os.File, new bool) bool
+
+// OnCloseFunc is the prototype of the onClose callback
+type OnCloseFunc func(path string, didRotate bool)
+
 // File describes a file that gets rotated daily
 type File struct {
 	sync.Mutex
@@ -25,7 +34,7 @@ type File struct {
 	// pathGenerator and pathFormat are 2 ways for generating
 	// a name of the file when we need to rotate
 	// only one of them should be set
-	pathGenerator func(time.Time) string
+	pathGenerator PathGeneratorFunc
 	pathFormat    string
 
 	Location *time.Location
@@ -34,8 +43,8 @@ type File struct {
 	day     int
 	path    string
 	file    *os.File
-	onOpen  func(file *os.File, new bool)
-	onClose func(path string, didRotate bool)
+	onOpen  OnOpenFunc
+	onClose OnCloseFunc
 
 	// position in the file of last Write or Write2, exposed for tests
 	lastWritePos int64
@@ -62,37 +71,43 @@ func (f *File) Path() string {
 }
 
 func (f *File) open() error {
-	t := time.Now().In(f.Location)
-	if f.pathGenerator != nil {
-		f.path = f.pathGenerator(t)
-	} else {
-		f.path = t.Format(f.pathFormat)
-	}
-	f.day = t.YearDay()
+	for i := uint(0); ; i++ {
+		t := time.Now().In(f.Location)
+		if f.pathGenerator != nil {
+			f.path = f.pathGenerator(t, i)
+		} else {
+			f.path = t.Format(f.pathFormat)
+		}
+		f.day = t.YearDay()
 
-	// we can't assume that the dir for the file already exists
-	dir := filepath.Dir(f.path)
-	err := os.MkdirAll(dir, 0755)
-	if err != nil {
-		return err
-	}
-
-	// would be easier to open with os.O_APPEND but Seek() doesn't work in that case
-	n := false
-	flag := os.O_WRONLY
-	f.file, err = os.OpenFile(f.path, flag, 0644)
-	if err != nil {
-		flag |= os.O_CREATE
-		f.file, err = os.OpenFile(f.path, flag, 0644)
+		// we can't assume that the dir for the file already exists
+		dir := filepath.Dir(f.path)
+		err := os.MkdirAll(dir, 0755)
 		if err != nil {
 			return err
 		}
-		n = true
+
+		// would be easier to open with os.O_APPEND but Seek() doesn't work in that case
+		n := false
+		flag := os.O_WRONLY
+		f.file, err = os.OpenFile(f.path, flag, 0644)
+		if err != nil {
+			flag |= os.O_CREATE
+			f.file, err = os.OpenFile(f.path, flag, 0644)
+			if err != nil {
+				return err
+			}
+			n = true
+		}
+
+		if f.onOpen == nil || f.onOpen(f.file, n) {
+			break
+		} else {
+			f.file.Close()
+		}
+
 	}
-	if f.onOpen != nil {
-		f.onOpen(f.file, n)
-	}
-	_, err = f.file.Seek(0, io.SeekEnd)
+	_, err := f.file.Seek(0, io.SeekEnd)
 	return err
 }
 
@@ -124,7 +139,7 @@ func (f *File) reopenIfNeeded() error {
 // Warning: time.Format might format more than you expect e.g.
 // time.Now().Format(`/logs/dir-2/2006-01-02.txt`) will change "-2" in "dir-2" to
 // current day. For better control over path generation, use NewFileWithPathGenerator
-func NewFile(pathFormat string, onOpen func(file *os.File, new bool), onClose func(path string, didRotate bool)) (*File, error) {
+func NewFile(pathFormat string, onOpen OnOpenFunc, onClose OnCloseFunc) (*File, error) {
 	return newFile(pathFormat, nil, onOpen, onClose)
 }
 
@@ -140,11 +155,11 @@ func NewFile(pathFormat string, onOpen func(file *os.File, new bool), onClose fu
 // didRotate will be true if it was closed due to rotation.
 // If onClose() takes a long time, you should do it in a background goroutine
 // (it blocks all other operations, including writes)
-func NewFileWithPathGenerator(pathGenerator func(time.Time) string, onOpen func(file *os.File, new bool), onClose func(path string, didRotate bool)) (*File, error) {
+func NewFileWithPathGenerator(pathGenerator PathGeneratorFunc, onOpen OnOpenFunc, onClose OnCloseFunc) (*File, error) {
 	return newFile("", pathGenerator, onOpen, onClose)
 }
 
-func newFile(pathFormat string, pathGenerator func(time.Time) string, onOpen func(file *os.File, new bool), onClose func(path string, didRotate bool)) (*File, error) {
+func newFile(pathFormat string, pathGenerator PathGeneratorFunc, onOpen OnOpenFunc, onClose OnCloseFunc) (*File, error) {
 	f := &File{
 		pathFormat:    pathFormat,
 		pathGenerator: pathGenerator,
